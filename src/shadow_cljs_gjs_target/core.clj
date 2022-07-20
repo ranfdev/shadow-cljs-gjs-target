@@ -85,7 +85,7 @@ cljs.core.apply.cljs$core$IFn$_invoke$arity$2(" (comp/munge main-fn) ", window['
 
 (defn replace-goog-global [state]
   (update-in state [:sources output/goog-base-id :source]
-    str/replace output/goog-global-snippet "goog.global = global;"))
+             str/replace output/goog-global-snippet "goog.global = global;"))
 
 (defn gjs-common-preambles
   []
@@ -111,6 +111,14 @@ console.debug = SHADOW_GJS_create_logger_fn('[DEBUG]');
 console.error = SHADOW_GJS_create_logger_fn('[ERROR]');
 ")
 
+(defn inject-gjs-repl
+  [state {:keys [devtools] :as config}]
+  (if (false? (:enabled devtools))
+    state
+    (-> state
+        (update-in [:compiler-options :closure-defines] merge (shared/repl-defines state config))
+        (update-in [:shadow.build.modules/config :main :entries] shared/prepend '[shadow-cljs-gjs-target.repl]))))
+
 (defn configure
   [state mode {:keys [main output-to] :as config}]
   (let [main-ns
@@ -132,10 +140,10 @@ console.error = SHADOW_GJS_create_logger_fn('[ERROR]');
 
         gjs-config
         (assoc config
-          :main-ns (symbol main-ns)
-          :main-fn (symbol main-fn)
-          :main main
-          :output-to output-to)
+               :main-ns (symbol main-ns)
+               :main-fn (symbol main-fn)
+               :main main
+               :output-to output-to)
 
         main-call
         (-> gjs-config :main (make-main-call-js))
@@ -146,7 +154,7 @@ console.error = SHADOW_GJS_create_logger_fn('[ERROR]');
             (update :prepend #(str (gjs-common-preambles) %))
             (update :prepend #(str "(function(){\n" %))
             (cond->
-              (not (false? (:hashbang config)))
+             (not (false? (:hashbang config)))
               (update :prepend #(str "#!/usr/bin/env gjs\n" %)))
             (update :append-js str "\n" main-call)
             (update :append str "\n})();\n"))]
@@ -164,25 +172,23 @@ console.error = SHADOW_GJS_create_logger_fn('[ERROR]');
         ;; all semi-recent versions of gjs should be fine with es8
         ;; don't overwrite user choice though
         (cond->
-            (nil? (get-in state [:shadow.build/config :compiler-options :output-feature-set]))
+         (nil? (get-in state [:shadow.build/config :compiler-options :output-feature-set]))
           (assoc-in [:compiler-options :output-feature-set] :es8))
 
         (build-api/configure-modules
-          {:main
-           (assoc module-opts
-             :entries [(symbol main-ns)]
-             :depends-on #{})})
+         {:main
+          (assoc module-opts
+                 :entries [(symbol main-ns)]
+                 :depends-on #{})})
 
         (assoc-in [:compiler-options :closure-defines 'cljs.core/*target*] "gjs")
 
         (cond->
-            (:worker-info state)
-            (shared/inject-node-repl config)
+         (:worker-info state)
+          (inject-gjs-repl config)
 
-            (= :dev mode)
-          (shared/inject-preloads :main config)
-          )
-        )))
+          (= :dev mode)
+          (shared/inject-preloads :main config)))))
 
 (defn compile [state]
   (-> state
@@ -227,7 +233,7 @@ const SHADOW_IMPORT_PATH = function (rel_import_path) {
       [state {:type ::flush-unoptimized
               :output-file (.getAbsolutePath output-to)}]
 
-      (let [{:keys [prepend append sources]}
+      (let [{:keys [prepend append sources devtools]}
             (first build-modules)
 
             output-dir-path
@@ -248,40 +254,40 @@ const SHADOW_IMPORT_PATH = function (rel_import_path) {
 
             out
             (str/join "\n"
-              [prepend
+                      [prepend
+                       (:client-ns devtools)
+                       (gjs-common-preambles)
+                       (gjs-unoptimized-preambles rel-path)
 
-               (gjs-common-preambles)
-               (gjs-unoptimized-preambles rel-path)
+                       (closure-defines state)
 
-               (closure-defines state)
-
+                       (slurp (io/resource "shadow_cljs_gjs_target/websocket.js"))
                ;; provides SHADOW_IMPORT and other things
-               (slurp (io/resource "shadow_cljs_gjs_target/bootstrap.js"))
+                       (slurp (io/resource "shadow_cljs_gjs_target/bootstrap.js"))
 
                ;; import all other sources
-               (->> sources
-                    (map #(get-in state [:sources %]))
-                    (map (fn [{:keys [provides output-name] :as src}]
-                           (if (contains? provides 'goog)
-                             (let [{:keys [js] :as out}
-                                   (data/get-output! state src)]
-                               (str (str/replace js #"goog.global = this;" "goog.global = global;")
-                                    "\ngoog.provide = SHADOW_PROVIDE;"
-                                    "\ngoog.require = SHADOW_REQUIRE;"
-                                    (when (seq polyfill-js)
-                                      (str "\n" polyfill-js
-                                           "\nglobal.$jscomp = $jscomp;"))))
-                             (str "SHADOW_IMPORT(" (pr-str output-name) ");"))))
-                    (str/join "\n"))
+                       (->> sources
+                            (map #(get-in state [:sources %]))
+                            (map (fn [{:keys [provides output-name] :as src}]
+                                   (if (contains? provides 'goog)
+                                     (let [{:keys [js] :as out}
+                                           (data/get-output! state src)]
+                                       (str (str/replace js #"goog.global = this;" "goog.global = global;")
+                                            "\ngoog.provide = SHADOW_PROVIDE;"
+                                            "\ngoog.require = SHADOW_REQUIRE;"
+                                            (when (seq polyfill-js)
+                                              (str "\n" polyfill-js
+                                                   "\nglobal.$jscomp = $jscomp;"))))
+                                     (str "SHADOW_IMPORT(" (pr-str output-name) ");"))))
+                            (str/join "\n"))
 
-               append])]
+                       append])]
 
         (io/make-parents output-to)
         (spit output-to out))))
 
   ;; return unmodified state
   state)
-
 
 (defn flush-optimized
   [{::closure/keys [modules] :keys [gjs-config] :as state}]
@@ -347,12 +353,11 @@ const SHADOW_IMPORT_PATH = function (rel_import_path) {
 
 (s/def ::target
   (s/keys
-    :req-un
-    [::main
-     ::shared/output-to]
-    :opt-un
-    [::shared/output-dir]
-    ))
+   :req-un
+   [::main
+    ::shared/output-to]
+   :opt-un
+   [::shared/output-dir]))
 
 (defmethod config/target-spec :gjs [_]
   (s/spec ::target))
@@ -364,10 +369,10 @@ const SHADOW_IMPORT_PATH = function (rel_import_path) {
   (let [{:keys [main main-ns main-fn]} gjs-config]
     (when-not (get-in compiler-env [:cljs.analyzer/namespaces main-ns :defs main-fn])
       (throw (ex-info (format "The configured main \"%s\" does not exist!" main)
-               {:tag ::main-not-found
-                :main-ns main-ns
-                :main-fn main-fn
-                :main main})))
+                      {:tag ::main-not-found
+                       :main-ns main-ns
+                       :main-fn main-fn
+                       :main main})))
     state))
 
 (defn flush [state mode config]
@@ -390,11 +395,10 @@ const SHADOW_IMPORT_PATH = function (rel_import_path) {
     (-> state
         (check-main-exists!)
         (cond->
-          (shared/bootstrap-host-build? state)
+         (shared/bootstrap-host-build? state)
           (shared/bootstrap-host-info)))
 
     :flush
     (flush state mode config)
 
-    state
-    ))
+    state))

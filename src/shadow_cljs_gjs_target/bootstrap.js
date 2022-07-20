@@ -40,3 +40,7 @@ var SHADOW_IMPORT = global.SHADOW_IMPORT = function(src) {
 
   return true;
 };
+
+var SHADOW_GJS_EVAL = function(js) {
+  eval(js)
+}
